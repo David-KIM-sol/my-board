@@ -1,0 +1,5 @@
+{
+  "name": "my-board",
+  "owner": { "name": "David-KIM-sol" },
+  "plugins": [{ "name": "my-board", "source": "./" }]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "my-board",
+  "version": "0.1.0",
+  "description": "나만의 Claude 보드: 사용량 그래프, 연결된 데이터, 빠른 설정 전환을 채팅 옆 패널에",
+  "types": "./types/index.d.ts"
+}
