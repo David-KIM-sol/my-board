@@ -3,6 +3,11 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { BoardData, Connector, Limit, Sample, Segment, Settings } from '../types'
 
+import { CONNECTORS, DARK, FONT, GROUP_ORDER, UUID, clockText, errText, esc, paletteFor } from './common'
+import type { Palette } from './common'
+import { activityBody, readActivity, onToolEnd, onToolStart, onTurnEnd, onTurnStart, tick } from './activity'
+import { BRAIN_PANE, BRAIN_TITLE, brainTree, readBrain, refreshBrain } from './brain'
+
 // ─── constants ──────────────────────────────────────────────────────────────
 
 const PANE = 'my-board'
@@ -14,26 +19,6 @@ const HISTORY_MAX = 240
 const data = atom({ plugin: 'my-board', key: 'data' } as const, null, { shape: 'data-1' })
 const busy = atom({ plugin: 'my-board', key: 'busy' } as const, null)
 
-// claude.ai connectors arrive as ids; the names come from the app's connector list.
-const CONNECTORS: Record<string, { name: string; group: string }> = {
-  'c5099e57-a99c-416c-a4bd-07a186eea3c8': { name: 'Notion', group: '문서·노트' },
-  '8d7c375e-e32b-4ceb-bdbc-3f3627734f20': { name: 'Google Docs', group: '문서·노트' },
-  '1f328096-7e9b-4c3e-8f56-6c84b04f2801': { name: 'Google Sheets', group: '문서·노트' },
-  '1a59c906-04da-521d-bda7-7f71b9f9e01c': { name: 'Claude Docs', group: '문서·노트' },
-  '312e4d41-e30e-4b1e-a156-df5b0b1dc578': { name: 'Google Drive', group: '파일' },
-  '2c329b58-3d52-468c-aabb-b26fcb44ae80': { name: 'Dropbox', group: '파일' },
-  '264c3014-3301-438c-80f3-8c133020fbbe': { name: 'Gmail', group: '소통·일정' },
-  '3a882acb-0b3b-4d36-a970-95f7b921c86e': { name: 'Google Calendar', group: '소통·일정' },
-  '8549a66e-ac75-4658-b7c3-c13fa6f01e34': { name: 'Plaud', group: '소통·일정' },
-  '899fc4c9-b864-4e62-8321-5e907a582bfd': { name: 'Canva', group: '디자인' },
-  'e4a50ff4-e1ff-4fa1-85dd-0e7f87e0893c': { name: 'Adobe', group: '디자인' },
-  '71118d6b-a62f-47ac-bc47-9c76af95cca4': { name: 'Supabase', group: '데이터' },
-  Control_Chrome: { name: 'Chrome 제어', group: '브라우저·자동화' },
-  'claude-in-chrome': { name: 'Claude in Chrome', group: '브라우저·자동화' },
-  'scheduled-tasks': { name: '예약 작업', group: '브라우저·자동화' },
-}
-const GROUP_ORDER = ['문서·노트', '파일', '소통·일정', '디자인', '데이터', '브라우저·자동화', '기타']
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const SEGMENT_NAMES: Record<string, string> = {
   Messages: '대화',
@@ -68,34 +53,6 @@ const PERMISSION_OPTIONS = [
 
 // ─── palette ────────────────────────────────────────────────────────────────
 
-type Palette = {
-  text: string
-  sub: string
-  faint: string
-  track: string
-  card: string
-  border: string
-  chip: string
-}
-const DARK: Palette = {
-  text: '#eef0f6',
-  sub: '#9097a8',
-  faint: '#5d6375',
-  track: '#ffffff14',
-  card: '#ffffff08',
-  border: '#ffffff1a',
-  chip: '#ffffff0d',
-}
-const LIGHT: Palette = {
-  text: '#141722',
-  sub: '#5d6375',
-  faint: '#9aa0b0',
-  track: '#0f172a14',
-  card: '#0f172a06',
-  border: '#0f172a1a',
-  chip: '#0f172a0a',
-}
-const paletteFor = (theme: string) => (theme.startsWith('light') ? LIGHT : DARK)
 
 const RINGS: Record<string, { label: string; from: string; to: string }> = {
   five_hour: { label: '5시간', from: '#67e8f9', to: '#3b82f6' },
@@ -103,15 +60,12 @@ const RINGS: Record<string, { label: string; from: string; to: string }> = {
   context: { label: '컨텍스트', from: '#6ee7b7', to: '#14b8a6' },
 }
 const HOT = { from: '#fda4af', to: '#f43f5e' }
-const FONT = `-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Pretendard', 'Segoe UI', sans-serif`
 
 const level = (p: number) => (p >= 80 ? '위험' : p >= 50 ? '주의' : '여유')
 const levelColor = (p: number) => (p >= 80 ? '#fb7185' : p >= 50 ? '#fbbf24' : '#34d399')
 
 // ─── small helpers ──────────────────────────────────────────────────────────
 
-const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const kTokens = (n: number) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : `${n}`
 
@@ -128,13 +82,6 @@ const untilText = (iso: string | undefined, now: number) => {
   return `${h > 0 ? `${h}시간 ` : ''}${m}분 후 초기화`
 }
 
-const clockText = (t: number) => {
-  const d = new Date(t)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-
-  return `${hh}:${mm}`
-}
 
 const modelKey = (v: string) => {
   const s = v.toLowerCase()
@@ -465,8 +412,11 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({ name: 'board', description: 'Claude 보드를 열고 값을 새로 읽기' })
+    await $.command.register({ name: 'brain', description: '세컨드 브레인: 내 대화들 사이의 연결 보기' })
     void $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
+    $.clock.every(4000, () => void tick($))
+    $.clock.after(8000, () => void refreshBrain($))
 
     return result
   })
@@ -484,12 +434,75 @@ export const register: Register = on => {
     return { text: opened.isPlaced ? 'Claude 보드를 새로 읽었어요.' : '값은 새로 읽었지만 보드를 그릴 화면이 없어요.' }
   })
 
+  on('command.run', { command: 'brain' }, async $ => {
+    const opened = await $.ui.open({ id: BRAIN_PANE, title: BRAIN_TITLE })
+    void refreshBrain($)
+
+    return { text: opened.isPlaced ? '세컨드 브레인을 열었어요. 새 대화가 있으면 정리합니다.' : '세컨드 브레인을 그릴 화면이 없어요.' }
+  })
+
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      try {
+        await onTurnStart($, e.text)
+      } catch {
+        // the card is a view; a failed write never holds the turn
+      }
+    }
+
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      try {
+        await onTurnEnd($, e.durationMs)
+      } catch {
+        // as above
+      }
+    }
+
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const args = e as unknown as Record<string, unknown>
+    try {
+      await onToolStart($, e.tool_use_id, e.tool, args)
+    } catch {
+      // as above
+    }
+    try {
+      return await next(e)
+    } finally {
+      try {
+        await onToolEnd($, e.tool_use_id)
+      } catch {
+        // as above
+      }
+    }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: BRAIN_PANE }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    const view = await readBrain($)
+    const now = await $.clock.now()
+
+    return brainTree(
+      view,
+      now,
+      { Box: els.Box, Text: els.Text, Button: els.Button, Svg: 'Svg' in els ? els.Svg : undefined },
+      () => void refreshBrain($),
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Svg = 'Svg' in els ? els.Svg : undefined
     const board = await read($, data)
     const working = await read($, busy)
+    const act = await readActivity($)
     if (!board) return <Text dimColor>보드를 준비하는 중…</Text>
 
     const pal = paletteFor(board.settings.theme)
@@ -586,6 +599,8 @@ export const register: Register = on => {
           </Box>
         </Box>
 
+        {card('지금 하는 일', undefined, activityBody(act, now, pal, { Box, Text }))}
+
         {card(
           '사용량',
           undefined,
@@ -672,9 +687,20 @@ export const register: Register = on => {
         ) : null}
 
         <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-          <Button key="refresh" label="새로 고침" variant="secondary" onPress={() => void refresh($, e.viewport?.columns)} />
+          <Box flexDirection="row" gap="sm">
+            <Button key="refresh" label="새로 고침" variant="secondary" onPress={() => void refresh($, e.viewport?.columns)} />
+            <Button
+              key="open-brain"
+              label="세컨드 브레인"
+              variant="primary"
+              onPress={() => {
+                void $.ui.open({ id: BRAIN_PANE, title: BRAIN_TITLE })
+                void refreshBrain($)
+              }}
+            />
+          </Box>
           <Text size="caption" color={pal.faint}>
-            /board 로도 열 수 있어요
+            /board · /brain
           </Text>
         </Box>
       </Box>
