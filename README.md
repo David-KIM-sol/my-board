@@ -22,6 +22,16 @@ Claude Code 화면 옆에 띄우는 나만의 Claude 보드입니다.
 
 커넥터 이름표는 `hooks/register.tsx`의 `CONNECTORS` 목록에 직접 적혀 있습니다. 새 커넥터는 "새 커넥터 ○○○○"로 나오니 그때 한 줄 추가하세요.
 
+## 바탕화면 창
+
+보드를 Claude 밖의 독립 창으로도 띄울 수 있습니다. 한 번만 실행하세요:
+
+```bash
+bash window/make-app.sh
+```
+
+`~/Applications/Claude 보드.app`과 바탕화면 아이콘이 생기고, 누르면 Chrome의 앱 창(탭 없는 창)으로 보드가 열립니다. 모드가 몇 초마다 `~/Library/Application Support/my-board/board-data.js`에 값을 써 두고, 창은 4초마다 그 값을 다시 읽습니다. Claude Code가 꺼져 있으면 마지막 값과 "마지막 갱신 ○분 전"이 표시됩니다. 창은 보기 전용이고, 설정 바꾸기는 Claude 안의 보드에서 합니다. Google Chrome이 필요합니다.
+
 ## 설치
 
 터미널의 Claude Code 프롬프트에서:
