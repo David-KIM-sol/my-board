@@ -5,7 +5,7 @@
 import { atom, read, update } from 'claude-code'
 import type { BoxProps, ButtonProps, ElementConstructor, EngineInterface, SvgProps, TextProps } from 'claude-code'
 
-import { FONT, connectorOf, errText, esc, paletteFor } from './common'
+import { DARK, FONT, connectorOf, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
 import type { BrainNode, BrainView, Conv, Tagged } from '../types'
 
@@ -539,4 +539,59 @@ export function brainTree(view: BrainView | null, now: number, els: BrainEls, on
 
 export async function readBrain($: EngineInterface) {
   return read($, brain)
+}
+
+// ─── the desktop window ────────────────────────────────────────────────────
+
+export type BrainExport = {
+  status: string
+  isBusy: boolean
+  total: number
+  mapSvg: string
+  legend: [string, string][]
+  related: { title: string; reason: string }[]
+  topics: [string, number][]
+  list: { title: string; when: string; summary: string; tags: string[]; isCurrent: boolean }[]
+}
+
+/** What the desktop window shows of the second brain, drawn for its dark page. */
+export function brainExport(view: BrainView | null, now: number): BrainExport | null {
+  if (!view || view.nodes.length === 0) return null
+  const { colors, ranked } = tagColors(view.nodes)
+  const current = view.nodes.find(nd => nd.ids.includes(view.currentId))
+  const related = current
+    ? view.nodes
+        .filter(nd => nd !== current)
+        .map(nd => ({
+          nd,
+          shared: nd.tags.filter(t => current.tags.includes(t)),
+          conn: nd.connectors.filter(c => current.connectors.includes(c)),
+        }))
+        .filter(x => x.shared.length > 0 || x.conn.length > 0)
+        .sort((a, b) => b.shared.length + 0.35 * b.conn.length - (a.shared.length + 0.35 * a.conn.length))
+        .slice(0, 4)
+        .map(({ nd, shared, conn }) => ({
+          title: nd.title + (nd.count > 1 ? ` ×${nd.count}` : ''),
+          reason: [shared.length ? `공통 주제 ${shared.map(t => `#${t}`).join(' ')}` : '', conn.length ? `같이 쓴 커넥터 ${conn.join(', ')}` : '']
+            .filter(Boolean)
+            .join(' · '),
+        }))
+    : []
+
+  return {
+    status: view.status,
+    isBusy: view.isBusy,
+    total: view.nodes.reduce((a, nd) => a + nd.count, 0),
+    mapSvg: mapSvg(view.nodes, view.currentId, DARK),
+    legend: [...colors.entries()],
+    related,
+    topics: ranked.slice(0, 18),
+    list: view.nodes.slice(0, 10).map(nd => ({
+      title: nd.title + (nd.count > 1 ? ` ×${nd.count}` : ''),
+      when: dateText(nd.lastAt, now),
+      summary: nd.summary,
+      tags: nd.tags,
+      isCurrent: nd.ids.includes(view.currentId),
+    })),
+  }
 }

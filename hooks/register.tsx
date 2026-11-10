@@ -6,7 +6,7 @@ import type { BoardData, Connector, Limit, Sample, Segment, Settings } from '../
 import { CONNECTORS, DARK, FONT, GROUP_ORDER, UUID, clockText, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
 import { activityBody, readActivity, onToolEnd, onToolStart, onTurnEnd, onTurnStart, tick } from './activity'
-import { BRAIN_PANE, BRAIN_TITLE, brainTree, readBrain, refreshBrain } from './brain'
+import { BRAIN_PANE, BRAIN_TITLE, brainExport, brainTree, readBrain, refreshBrain } from './brain'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -406,6 +406,70 @@ async function applySetting($: EngineInterface, key: string, value: string, labe
   await refresh($)
 }
 
+// ─── the desktop window ─────────────────────────────────────────────────────
+// The board also lives outside Claude: desktop/board.html, opened by the
+// "Claude 보드" app, reloads board-data.js, which this writes every few seconds.
+
+let lastDesktop = ''
+let lastDesktopAt = 0
+
+async function desktopDir($: EngineInterface) {
+  const home = (await $.env.get('HOME')) ?? ''
+  return `${home}/Library/Application Support/my-board`
+}
+
+async function installViewer($: EngineInterface) {
+  try {
+    const html = await $.fs.read(`${$.plugin.root}/desktop/board.html`)
+    await $.fs.write(`${await desktopDir($)}/board.html`, html)
+  } catch {
+    // the window is extra; the panes work without it
+  }
+}
+
+async function writeDesktop($: EngineInterface) {
+  try {
+    const board = await read($, data)
+    if (!board) return
+    const act = await readActivity($)
+    const view = await readBrain($)
+    const now = await $.clock.now()
+    const ringRows: RingRow[] = [
+      ...(['five_hour', 'seven_day'] as const).map(kind => {
+        const l = board.limits.find(x => x.kind === kind)
+        return { key: kind, label: RINGS[kind]?.label ?? kind, percent: l?.percent ?? 0, sub: l ? untilText(l.resetsAt, now) : '응답 후 표시' }
+      }),
+      { key: 'context', label: '컨텍스트', percent: board.context.percent, sub: `${kTokens(board.context.tokens)} / ${kTokens(board.context.window)}` },
+    ]
+    const payload = {
+      at: board.at,
+      writtenAt: now,
+      model: board.context.model,
+      costUsd: board.costUsd ?? 0,
+      status: statusLine(board),
+      limits: board.limits,
+      context: { tokens: board.context.tokens, window: board.context.window, percent: board.context.percent },
+      settings: board.settings,
+      svgs: {
+        rings: ringsSvg(ringRows, DARK),
+        context: contextSvg(board.context, DARK),
+        trend: trendSvg(board.history, now, DARK),
+      },
+      connectors: board.connectors,
+      activity: act,
+      brain: brainExport(view, now),
+    }
+    const body = JSON.stringify(payload)
+    const key = body.replace(/"writtenAt":\d+,/, '')
+    if (key === lastDesktop && now - lastDesktopAt < 30_000) return
+    lastDesktop = key
+    lastDesktopAt = now
+    await $.fs.write(`${await desktopDir($)}/board-data.js`, `window.MY_BOARD = ${body};\n`)
+  } catch {
+    // as above
+  }
+}
+
 // ─── hooks ──────────────────────────────────────────────────────────────────
 
 export const register: Register = on => {
@@ -416,6 +480,8 @@ export const register: Register = on => {
     void $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
     $.clock.every(4000, () => void tick($))
+    await installViewer($)
+    $.clock.every(5000, () => void writeDesktop($))
     $.clock.after(8000, () => void refreshBrain($))
 
     return result
