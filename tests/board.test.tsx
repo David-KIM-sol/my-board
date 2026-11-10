@@ -68,7 +68,10 @@ const node = (key: string, tags: string[], connectors: string[], extra: Record<s
   ids: [key],
   count: 1,
   userMsgs: 8,
+  firstAt: NOW - 3 * 86_400_000,
   lastAt: NOW - 86_400_000,
+  importance: 3,
+  kind: '운영·행정',
   tags,
   summary: `${key} 요약`,
   connectors,
@@ -81,11 +84,11 @@ const BRAIN = {
   currentId: 'board',
   theme: 'dark',
   nodes: [
-    node('보드 만들기', ['모드 개발', '사용량', '노션 정리'], ['Notion'], { ids: ['board'] }),
-    node('녹음 전사', ['녹음 전사', '회의록'], ['Plaud', 'Notion']),
-    node('자료 정리', ['자료 정리', '노션 정리', '회의록'], ['Notion']),
+    node('보드 만들기', ['모드 개발', '사용량', '노션 정리'], ['Notion'], { ids: ['board'], firstAt: NOW, importance: 4, kind: '도구·자동화', userMsgs: 30 }),
+    node('녹음 전사', ['녹음 전사', '회의록'], ['Plaud', 'Notion'], { firstAt: NOW - 5 * 86_400_000, importance: 5, kind: '핵심 업무', userMsgs: 3 }),
+    node('자료 정리', ['자료 정리', '노션 정리', '회의록'], ['Notion'], { firstAt: NOW - 4 * 86_400_000, importance: 5, kind: '핵심 업무', userMsgs: 25 }),
     node('할 일 정리', ['일정 관리', '노션 정리'], ['Notion', 'Google Calendar']),
-    node('영수증 모으기', ['영수증', '메일 정리'], ['Gmail']),
+    node('영수증 모으기', ['영수증', '메일 정리'], ['Gmail'], { importance: 2, kind: '운영·행정', userMsgs: 16 }),
     node('반복 작업', ['디데이', '예약 작업'], [], { count: 6, ids: ['a', 'b', 'c', 'd', 'e', 'f'] }),
   ],
 }
@@ -93,15 +96,16 @@ const BRAIN = {
 test('the brain pane draws its map and lists', async ($, on) => {
   on('state.get', (_, e) => {
     const key = (e as { key?: string; ref?: { key?: string } }).key ?? (e as { ref?: { key?: string } }).ref?.key
-    return { value: { value: key === 'brain' ? { shape: 'brain-1', value: BRAIN } : null, version: 1 } }
+    return { value: { value: key === 'brain' ? { shape: 'brain-2', value: BRAIN } : null, version: 1 } }
   })
   on('clock.now', () => ({ value: NOW }))
 
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...PANE, requestId: 'my-brain', props: { ...PANE.props, title: '세컨드 브레인' }, surface })
     expect((await ui.find({ type: 'Text', text: /^세컨드 브레인$/ }))?.text).toBe('세컨드 브레인')
+    expect((await ui.find({ type: 'Text', text: /^일잘러 점검$/ }))?.text).toBe('일잘러 점검')
     expect((await ui.find({ type: 'Text', text: /녹음 전사 요약/ }))?.text).toBe('녹음 전사 요약')
-    if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBe(1)
+    if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBe(3)
     await ui.unmount()
   }
 })
@@ -115,7 +119,7 @@ test('the board draws on every surface', async ($, on) => {
         : key === 'activity'
           ? { shape: 'activity-1', value: ACTIVITY }
           : key === 'brain'
-            ? { shape: 'brain-1', value: BRAIN }
+            ? { shape: 'brain-2', value: BRAIN }
             : null
     return { value: { value, version: 1 } }
   })
