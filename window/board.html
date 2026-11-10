@@ -95,7 +95,30 @@
   .ttl.cur { color: var(--ok); }
   .sum { color: var(--sub); font-size: 12.5px; }
   .tags { color: var(--faint); font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .stat { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: rgba(255, 255, 255, 0.03); }
+  .stat .k { color: var(--faint); font-size: 11.5px; }
+  .stat .v { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .stat .s { color: var(--sub); font-size: 11.5px; }
+  .notes { list-style: none; margin: 8px 0 0; padding: 0; }
+  .notes li { font-size: 13px; padding: 3px 0 3px 12px; position: relative; }
+  .notes li::before { content: ''; position: absolute; left: 0; top: 11px; width: 5px; height: 5px; border-radius: 50%; background: var(--violet); }
   .note { color: var(--faint); font-size: 11.5px; margin-top: 16px; text-align: center; }
+  .back { display: inline-flex; align-items: center; gap: 6px; color: var(--sub); font-size: 13px; cursor: pointer; background: none; border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; margin-bottom: 12px; }
+  .back:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+  .sess { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .sess li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, 0.025); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+  .sess li:hover { border-color: rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.05); }
+  .sess li:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  .sess .sd { width: 10px; height: 10px; border-radius: 50%; }
+  .sess .sd.work { background: var(--warn); box-shadow: 0 0 10px rgba(251, 191, 36, 0.6); }
+  .sess .sd.idle { background: var(--ok); }
+  .sess .sd.off { background: var(--faint); }
+  .sess .nm { font-weight: 650; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .ln { color: var(--sub); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .rt { text-align: right; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sess .rt b { color: var(--text); font-weight: 650; }
+  .sess li.off { opacity: 0.6; }
   .empty { color: var(--sub); text-align: center; padding: 80px 20px; }
 </style>
 </head>
@@ -103,8 +126,10 @@
 <div class="wrap" id="app"><div class="empty">보드를 불러오는 중…</div></div>
 <script>
 (function () {
+  var DAY = 86400000;
   var last = '';
-  var data = null;
+  var sessions = {};
+  var index = {};
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -120,17 +145,10 @@
     c.appendChild(h);
     return c;
   }
-  function svgBox(markup) {
-    var d = el('div', 'svg');
-    d.innerHTML = markup || '';
-    return d;
-  }
+  function svgBox(markup) { var d = el('div', 'svg'); d.innerHTML = markup || ''; return d; }
   function pad(n) { return String(n).padStart(2, '0'); }
   function clock(t) { var d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
-  function elapsed(ms) {
-    var s = Math.max(0, Math.round(ms / 1000)), m = Math.floor(s / 60);
-    return m > 0 ? m + '분 ' + (s % 60) + '초' : s + '초';
-  }
+  function elapsed(ms) { var s = Math.max(0, Math.round(ms / 1000)), m = Math.floor(s / 60); return m > 0 ? m + '분 ' + (s % 60) + '초' : s + '초'; }
   function ago(ms) {
     var m = Math.floor(ms / 60000);
     if (m < 1) return '방금';
@@ -138,23 +156,41 @@
     var h = Math.floor(m / 60);
     return h < 24 ? h + '시간 전' : Math.floor(h / 24) + '일 전';
   }
+  function isOn(s) { return Date.now() - (s.writtenAt || 0) < 90000; }
+  function list() {
+    return Object.keys(sessions).map(function (k) { return sessions[k]; })
+      .filter(function (s) { return Date.now() - s.writtenAt < DAY / 2; })
+      .sort(function (a, b) {
+        var wa = isOn(a) && a.activity && a.activity.isWorking ? 2 : isOn(a) ? 1 : 0;
+        var wb = isOn(b) && b.activity && b.activity.isWorking ? 2 : isOn(b) ? 1 : 0;
+        return wb - wa || b.writtenAt - a.writtenAt;
+      });
+  }
+  function newest(field) {
+    return list().filter(function (s) { return s[field]; }).sort(function (a, b) { return b[field] - a[field]; })[0];
+  }
+  function selected() { var m = location.hash.match(/^#s=(.+)$/); return m ? decodeURIComponent(m[1]) : null; }
 
-  function liveBadge(d) {
-    var on = Date.now() - (d.writtenAt || 0) < 90000;
+  function liveBadge(on, at) {
     var box = el('div', 'live ' + (on ? 'on' : 'off'));
     var line = el('div');
     line.appendChild(el('span', 'dot'));
     line.appendChild(el('span', 'label', on ? '실시간' : 'Claude Code가 꺼져 있어요'));
     box.appendChild(line);
-    box.appendChild(el('div', 'meta', (on ? clock(d.at) + ' 갱신' : '마지막 갱신 ' + ago(Date.now() - d.at))));
-    box.id = 'live';
+    box.appendChild(el('div', 'meta', on ? clock(at) + ' 갱신' : '마지막 갱신 ' + ago(Date.now() - at)));
     return box;
   }
+  function statusText(a, on) {
+    if (!on) return '꺼짐';
+    return a.isWorking ? '◉ 작업 중 · ' + elapsed(Date.now() - (a.turnStartedAt || Date.now()))
+      : '● 대기' + (a.lastDurationMs != null ? ' · 마지막 작업 ' + elapsed(a.lastDurationMs) : '');
+  }
 
-  function activityCard(a) {
+  function activityCard(s) {
+    var a = s.activity || {};
     var c = card('지금 하는 일');
     var st = el('div', 'status ' + (a.isWorking ? 'work' : 'idle'));
-    st.id = 'act-status';
+    st.setAttribute('data-tick', s.id);
     c.appendChild(st);
     if (a.prompt) c.appendChild(el('div', 'prompt', '요청: ' + a.prompt));
     if (a.plan && a.plan.length) {
@@ -165,13 +201,11 @@
         var li = el('li', p.status === 'completed' ? 'done' : p.status === 'in_progress' ? 'now' : '');
         var i = el('span', 'i', p.status === 'completed' ? '✔' : p.status === 'in_progress' ? '▶' : '○');
         i.style.color = p.status === 'completed' ? 'var(--ok)' : p.status === 'in_progress' ? 'var(--warn)' : 'var(--faint)';
-        li.appendChild(i);
-        li.appendChild(el('span', '', p.content));
-        ul.appendChild(li);
+        li.appendChild(i); li.appendChild(el('span', '', p.content)); ul.appendChild(li);
       });
       c.appendChild(ul);
     }
-    var recent = (a.tools || []).slice(-6).reverse();
+    var recent = (a.tools || []).slice(-8).reverse();
     if (recent.length) {
       c.appendChild(el('div', 'label-sm', '최근 동작'));
       var ul2 = el('ul', 'acts');
@@ -183,38 +217,56 @@
         ul2.appendChild(li);
       });
       c.appendChild(ul2);
-    } else {
-      c.appendChild(el('div', 'label-sm', '아직 기록된 동작이 없어요'));
-    }
+    } else c.appendChild(el('div', 'label-sm', '아직 기록된 동작이 없어요'));
     return c;
   }
 
-  function updateClock() {
-    if (!data) return;
-    var a = data.activity || {};
-    var st = document.getElementById('act-status');
-    if (st) {
-      st.textContent = a.isWorking
-        ? '◉ 작업 중 · ' + elapsed(Date.now() - (a.turnStartedAt || Date.now()))
-        : '● 대기' + (a.lastDurationMs != null ? ' · 마지막 작업 ' + elapsed(a.lastDurationMs) : '');
-    }
-    var live = document.getElementById('live');
-    if (live) live.replaceWith(liveBadge(data));
+  function sessionsCard(all) {
+    var c = card('열린 세션', all.length + '개 · 누르면 자세히');
+    var ul = el('ul', 'sess');
+    all.forEach(function (s) {
+      var a = s.activity || {};
+      var on = isOn(s);
+      var li = el('li', on ? '' : 'off');
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
+      li.appendChild(el('span', 'sd ' + (!on ? 'off' : a.isWorking ? 'work' : 'idle')));
+      var mid = el('div');
+      mid.appendChild(el('div', 'nm', s.title));
+      var step = (a.plan || []).filter(function (p) { return p.status === 'in_progress'; })[0];
+      var lastTool = (a.tools || []).slice(-1)[0];
+      var line = step ? '▶ ' + step.content : lastTool ? '· ' + lastTool.label + (lastTool.detail ? ' ' + lastTool.detail : '') : a.prompt ? '요청: ' + a.prompt : '';
+      var st = el('div', 'ln', '');
+      st.setAttribute('data-tick', s.id);
+      st.setAttribute('data-short', '1');
+      mid.appendChild(st);
+      if (line) mid.appendChild(el('div', 'ln', line));
+      li.appendChild(mid);
+      var rt = el('div', 'rt');
+      var b = el('b', '', (s.context ? s.context.percent : 0) + '%');
+      rt.appendChild(b);
+      rt.appendChild(el('div', '', '컨텍스트'));
+      li.appendChild(rt);
+      function open() { location.hash = 's=' + encodeURIComponent(s.id); }
+      li.addEventListener('click', open);
+      li.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      ul.appendChild(li);
+    });
+    if (!all.length) c.appendChild(el('div', 'sum', '열린 세션이 없어요'));
+    c.appendChild(ul);
+    return c;
   }
 
   function connectorsCard(list) {
     var c = card('연결된 데이터', list.length + '곳');
-    var order = ['문서·노트', '파일', '소통·일정', '디자인', '데이터', '브라우저·자동화', '기타'];
-    order.forEach(function (g) {
+    ['문서·노트', '파일', '소통·일정', '디자인', '데이터', '브라우저·자동화', '기타'].forEach(function (g) {
       var items = list.filter(function (x) { return x.group === g; });
       if (!items.length) return;
       c.appendChild(el('div', 'group', g));
       var row = el('div', 'chips');
       items.forEach(function (x) {
         var ch = el('span', 'chip');
-        ch.appendChild(el('span', 'g', '●'));
-        ch.appendChild(el('span', '', x.name));
-        ch.appendChild(el('span', 'n', String(x.tools)));
+        ch.appendChild(el('span', 'g', '●')); ch.appendChild(el('span', '', x.name)); ch.appendChild(el('span', 'n', String(x.tools)));
         row.appendChild(ch);
       });
       c.appendChild(row);
@@ -224,35 +276,41 @@
 
   function brainCards(b) {
     var out = [];
+    if (b && b.insight) {
+      var ins = b.insight;
+      var ic = card('일잘러 점검', '대화 ' + ins.total + '개 기준');
+      var st = el('div', 'stats');
+      var tile = function (k, v, sub, color) {
+        var t = el('div', 'stat');
+        t.appendChild(el('div', 'k', k));
+        var vv = el('div', 'v', v); vv.style.color = color; t.appendChild(vv);
+        t.appendChild(el('div', 's', sub));
+        return t;
+      };
+      var cr = ins.continuity.rate, fs = ins.focus.importantShare;
+      st.appendChild(tile('맥락 이어가기', cr + '%', ins.continuity.continued + '개가 앞선 일과 이어짐', cr >= 60 ? 'var(--ok)' : cr >= 40 ? 'var(--warn)' : 'var(--hot)'));
+      st.appendChild(tile('일의 흐름', ins.flows.count + '개', '따로 떨어진 대화 ' + ins.flows.isolated + '개', 'var(--cyan)'));
+      st.appendChild(tile('중요한 일 비중', fs + '%', '중요도 4 이상 ' + ins.focus.importantCount + '개', fs >= 50 ? 'var(--ok)' : 'var(--warn)'));
+      ic.appendChild(st);
+      if (ins.flows.names && ins.flows.names.length) ic.appendChild(el('div', 'tags', '큰 흐름: ' + ins.flows.names.map(function (t) { return '#' + t; }).join(' · ')));
+      ic.appendChild(svgBox(ins.focusSvg));
+      ic.appendChild(svgBox(ins.kindSvg));
+      var nl = el('ul', 'notes');
+      (ins.notes || []).forEach(function (line) { nl.appendChild(el('li', '', line)); });
+      ic.appendChild(nl);
+      out.push(ic);
+    }
     if (!b) {
       var c0 = card('세컨드 브레인');
-      c0.appendChild(el('div', 'sum', 'Claude Code의 보드에서 세컨드 브레인을 한 번 정리하면 여기에도 나타나요.'));
-      return [c0];
+      c0.appendChild(el('div', 'sum', 'Claude Code 보드에서 세컨드 브레인을 한 번 정리하면 여기에도 나타나요.'));
+      return out.concat([c0]);
     }
     var m = card('세컨드 브레인 · 연결 지도', '대화 ' + b.total + '개');
     m.appendChild(svgBox(b.mapSvg));
     var lg = el('div', 'legend');
-    (b.legend || []).forEach(function (pair) {
-      var s = el('span', '', '● ' + pair[0]);
-      s.style.color = pair[1];
-      lg.appendChild(s);
-    });
+    (b.legend || []).forEach(function (pair) { var s = el('span', '', '● ' + pair[0]); s.style.color = pair[1]; lg.appendChild(s); });
     m.appendChild(lg);
     out.push(m);
-
-    if (b.related && b.related.length) {
-      var r = card('지금 대화와 이어진 대화');
-      var ul = el('ul', 'rel');
-      b.related.forEach(function (x) {
-        var li = el('li');
-        li.appendChild(el('div', 'ttl', x.title));
-        li.appendChild(el('div', 'tags', x.reason));
-        ul.appendChild(li);
-      });
-      r.appendChild(ul);
-      out.push(r);
-    }
-
     if (b.topics && b.topics.length) {
       var t = card('자주 다룬 주제');
       var row = el('div', 'chips');
@@ -262,21 +320,17 @@
         var ch = el('span', 'chip');
         var name = el('span', '', '#' + p[0]);
         if (colors[p[0]]) { name.style.color = colors[p[0]]; ch.style.borderColor = colors[p[0]]; }
-        ch.appendChild(name);
-        ch.appendChild(el('span', 'n', String(p[1])));
-        row.appendChild(ch);
+        ch.appendChild(name); ch.appendChild(el('span', 'n', String(p[1]))); row.appendChild(ch);
       });
       t.appendChild(row);
       out.push(t);
     }
-
     var l = card('대화 목록', '최근 순');
     var ul2 = el('ul', 'list');
     (b.list || []).forEach(function (x) {
       var li = el('li');
-      var tt = el('div', 'ttl' + (x.isCurrent ? ' cur' : ''));
-      tt.appendChild(el('span', '', x.title));
-      tt.appendChild(el('span', 'when', x.when));
+      var tt = el('div', 'ttl');
+      tt.appendChild(el('span', '', x.title)); tt.appendChild(el('span', 'when', x.when));
       li.appendChild(tt);
       if (x.summary) li.appendChild(el('div', 'sum', x.summary));
       if (x.tags && x.tags.length) li.appendChild(el('div', 'tags', x.tags.map(function (s) { return '#' + s; }).join(' ')));
@@ -287,58 +341,120 @@
     return out;
   }
 
-  function render(d) {
+  function header(title, meta, on, at) {
+    var head = el('header');
+    var left = el('div');
+    left.appendChild(el('h1', '', title));
+    left.appendChild(el('div', 'meta', meta));
+    head.appendChild(left);
+    var badge = liveBadge(on, at);
+    badge.id = 'live';
+    head.appendChild(badge);
+    return head;
+  }
+
+  function renderOverview(app) {
+    var all = list();
+    var anyOn = all.some(isOn);
+    var latest = all.slice().sort(function (a, b) { return b.writtenAt - a.writtenAt; })[0];
+    var lim = newest('limitsAt') || latest;
+    var br = newest('brainAt');
+    var working = all.filter(function (s) { return isOn(s) && s.activity && s.activity.isWorking; }).length;
+    app.appendChild(header('Claude 보드', '전체 · 열린 세션 ' + all.filter(isOn).length + '개 · 작업 중 ' + working + '개', anyOn, latest.writtenAt));
+    var grid = el('div', 'grid');
+    var c1 = el('div', 'col'), c2 = el('div', 'col');
+    var u = card('계정 사용량', '모든 세션 합계'); u.appendChild(svgBox(lim.svgs && lim.svgs.limits)); c1.appendChild(u);
+    c1.appendChild(sessionsCard(all));
+    var tr = card('추이'); tr.appendChild(svgBox(lim.svgs && lim.svgs.trend)); c1.appendChild(tr);
+    c1.appendChild(connectorsCard((latest && latest.connectors) || []));
+    brainCards(br ? br.brain : null).forEach(function (c) { c2.appendChild(c); });
+    grid.appendChild(c1); grid.appendChild(c2);
+    app.appendChild(grid);
+  }
+
+  function renderSession(app, s) {
+    var back = el('button', 'back', '← 전체 보기');
+    back.addEventListener('click', function () { location.hash = ''; });
+    app.appendChild(back);
+    app.appendChild(header(s.title, (s.model || '') + ' · 이 세션 비용 $' + Number(s.costUsd || 0).toFixed(2), isOn(s), s.writtenAt));
+    var grid = el('div', 'grid');
+    var c1 = el('div', 'col'), c2 = el('div', 'col');
+    c1.appendChild(activityCard(s));
+    var u = card('이 세션 사용량'); u.appendChild(svgBox(s.svgs && s.svgs.session)); c2.appendChild(u);
+    var cx = card('컨텍스트 구성', s.context ? Math.round(s.context.tokens / 1000) + 'K / ' + Math.round(s.context.window / 1000) + 'K · ' + s.context.percent + '%' : '');
+    cx.appendChild(svgBox(s.svgs && s.svgs.context)); c2.appendChild(cx);
+    grid.appendChild(c1); grid.appendChild(c2);
+    app.appendChild(grid);
+  }
+
+  function render() {
     var app = document.getElementById('app');
     var scroll = window.scrollY;
     app.innerHTML = '';
-
-    var head = el('header');
-    var left = el('div');
-    left.appendChild(el('h1', '', 'Claude 보드'));
-    left.appendChild(el('div', 'meta', (d.model || '') + ' · 세션 비용 $' + Number(d.costUsd || 0).toFixed(2) + ' · ' + (d.status || '')));
-    head.appendChild(left);
-    head.appendChild(liveBadge(d));
-    app.appendChild(head);
-
-    var grid = el('div', 'grid');
-    var c1 = el('div', 'col');
-    var c2 = el('div', 'col');
-    c1.appendChild(activityCard(d.activity || {}));
-    var u = card('사용량'); u.appendChild(svgBox(d.svgs && d.svgs.rings)); c1.appendChild(u);
-    var cx = card('컨텍스트 구성', d.context ? Math.round(d.context.tokens / 1000) + 'K / ' + Math.round(d.context.window / 1000) + 'K · ' + d.context.percent + '%' : '');
-    cx.appendChild(svgBox(d.svgs && d.svgs.context)); c1.appendChild(cx);
-    var tr = card('추이'); tr.appendChild(svgBox(d.svgs && d.svgs.trend)); c1.appendChild(tr);
-    brainCards(d.brain).forEach(function (c) { c2.appendChild(c); });
-    c2.appendChild(connectorsCard(d.connectors || []));
-    grid.appendChild(c1);
-    grid.appendChild(c2);
-    app.appendChild(grid);
+    var all = list();
+    if (!all.length) {
+      app.innerHTML = '<div class="empty">아직 보드 데이터가 없어요.<br>Claude 앱의 Code 탭에서 대화를 한 번 시작하면 채워집니다.</div>';
+      return;
+    }
+    var id = selected();
+    if (id && sessions[id]) renderSession(app, sessions[id]);
+    else renderOverview(app);
     app.appendChild(el('div', 'note', '보기 전용 창이에요 · 설정 바꾸기와 세컨드 브레인 다시 정리는 Claude Code 안의 보드에서 할 수 있어요'));
-    updateClock();
+    tickNow();
     window.scrollTo(0, scroll);
   }
 
-  function load() {
-    var s = document.createElement('script');
-    s.src = 'board-data.js?t=' + Date.now();
-    s.onload = function () {
-      var d = window.MY_BOARD;
-      s.remove();
-      if (!d) return;
-      var key = JSON.stringify(d).replace(/"writtenAt":\d+,/, '');
-      data = d;
-      if (key !== last) { last = key; render(d); } else { updateClock(); }
-    };
-    s.onerror = function () {
-      s.remove();
-      if (!data) document.getElementById('app').innerHTML = '<div class="empty">아직 보드 데이터가 없어요.<br>Claude 앱의 Code 탭에서 대화를 한 번 시작하면 채워집니다.</div>';
-    };
-    document.head.appendChild(s);
+  function tickNow() {
+    document.querySelectorAll('[data-tick]').forEach(function (n) {
+      var s = sessions[n.getAttribute('data-tick')];
+      if (!s) return;
+      n.textContent = statusText(s.activity || {}, isOn(s));
+    });
+    var live = document.getElementById('live');
+    var id = selected();
+    var all = list();
+    if (live && all.length) {
+      var s = id && sessions[id];
+      var on = s ? isOn(s) : all.some(isOn);
+      var at = s ? s.writtenAt : Math.max.apply(null, all.map(function (x) { return x.writtenAt; }));
+      var nb = liveBadge(on, at); nb.id = 'live'; live.replaceWith(nb);
+    }
   }
 
+  function loadScript(src) {
+    return new Promise(function (resolve) {
+      var s = document.createElement('script');
+      s.src = src + '?t=' + Date.now();
+      s.onload = function () { s.remove(); resolve(true); };
+      s.onerror = function () { s.remove(); resolve(false); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function keyOf() {
+    return JSON.stringify(list().map(function (s) {
+      var c = Object.assign({}, s, { writtenAt: 0, svgs: Object.assign({}, s.svgs, { trend: '' }) });
+      return [c, isOn(s)];
+    })) + '|' + location.hash;
+  }
+
+  async function load() {
+    window.MY_BOARD_INDEX = null;
+    var ok = await loadScript('index.js');
+    index = (ok && window.MY_BOARD_INDEX && window.MY_BOARD_INDEX.sessions) || {};
+    var ids = Object.keys(index).filter(function (k) { return Date.now() - index[k].writtenAt < DAY / 2; });
+    window.MY_BOARD_SESSIONS = window.MY_BOARD_SESSIONS || {};
+    await Promise.all(ids.map(function (k) { return loadScript('sessions/' + encodeURIComponent(k) + '.js'); }));
+    sessions = {};
+    ids.forEach(function (k) { if (window.MY_BOARD_SESSIONS[k]) sessions[k] = window.MY_BOARD_SESSIONS[k]; });
+    var key = keyOf();
+    if (key !== last) { last = key; render(); } else tickNow();
+  }
+
+  window.addEventListener('hashchange', function () { last = ''; render(); window.scrollTo(0, 0); });
   load();
   setInterval(load, 4000);
-  setInterval(updateClock, 1000);
+  setInterval(tickNow, 1000);
 })();
 </script>
 </body>
