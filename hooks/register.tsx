@@ -407,7 +407,7 @@ async function applySetting($: EngineInterface, key: string, value: string, labe
 }
 
 // ─── the desktop window ─────────────────────────────────────────────────────
-// The board also lives outside Claude: desktop/board.html, opened by the
+// The board also lives outside Claude: window/board.html, opened by the
 // "Claude 보드" app, reloads board-data.js, which this writes every few seconds.
 
 let lastDesktop = ''
@@ -420,7 +420,7 @@ async function desktopDir($: EngineInterface) {
 
 async function installViewer($: EngineInterface) {
   try {
-    const html = await $.fs.read(`${$.plugin.root}/desktop/board.html`)
+    const html = await $.fs.read(`${$.plugin.root}/window/board.html`)
     await $.fs.write(`${await desktopDir($)}/board.html`, html)
   } catch {
     // the window is extra; the panes work without it
