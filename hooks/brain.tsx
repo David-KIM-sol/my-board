@@ -7,6 +7,7 @@ import type { BoxProps, ButtonProps, ElementConstructor, EngineInterface, SvgPro
 
 import { DARK, FONT, connectorOf, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
+import { KINDS, computeInsight, focusSvg, kindSvg } from './insight'
 import type { BrainNode, BrainView, Conv, Tagged } from '../types'
 
 export const BRAIN_PANE = 'my-brain'
@@ -15,7 +16,7 @@ const TAGS_KEY = 'brain-tags-v1'
 const BATCH = 8
 const RETAG_AFTER = 6
 
-export const brain = atom({ plugin: 'my-board', key: 'brain' } as const, null, { shape: 'brain-1' })
+export const brain = atom({ plugin: 'my-board', key: 'brain' } as const, null, { shape: 'brain-2' })
 
 const TAG_COLORS = ['#38bdf8', '#a78bfa', '#f472b6', '#fbbf24', '#34d399', '#fb923c', '#2dd4bf', '#e879f9']
 
@@ -46,7 +47,7 @@ function promptFor(convs: Conv[], vocabulary: string[]) {
       .join('\n')
   })
 
-  return `아래는 한 사람이 Claude와 나눈 대화들입니다. 대화마다 주제 태그 3~5개와 한 줄 요약을 붙여 주세요.
+  return `아래는 한 사람이 Claude와 나눈 대화들입니다. 대화마다 주제 태그 3~5개, 한 줄 요약, 중요도, 일의 종류를 붙여 주세요.
 
 규칙:
 - 태그는 짧은 한국어 명사구(2~8자). 예: 심방, 플라우드 녹음, 노션 정리, 설교 준비, 여름 캠프, 앱 개발
@@ -54,23 +55,37 @@ function promptFor(convs: Conv[], vocabulary: string[]) {
 - 이미 쓰고 있는 태그가 맞으면 그것을 다시 쓰세요: ${vocabulary.length ? vocabulary.join(', ') : '(아직 없음)'}
 - 요약은 40자 이내 한국어 한 문장.
 - 사람 이름은 태그에 넣지 마세요.
+- importance: 이 사람의 일과 삶 전체에서 이 대화가 다룬 일이 얼마나 중요한지 1~5 정수.
+  5 = 핵심 사명·큰 결과로 이어지는 일, 4 = 중요한 실무, 3 = 필요한 운영 일, 2 = 부수적인 일, 1 = 사소한 시도·설정.
+  대화가 길다고 중요한 것이 아닙니다. 일 자체의 중요도로만 판단하세요.
+- kind: 다음 중 하나: ${KINDS.join(', ')}
 
 반드시 JSON 하나로만 답하세요. 형식:
-{"<대화 id>": {"tags": ["태그1", "태그2"], "summary": "요약"}}
+{"<대화 id>": {"tags": ["태그1", "태그2"], "summary": "요약", "importance": 4, "kind": "핵심 업무"}}
 
 ${items.join('\n\n')}`
 }
 
-function parseTags(text: string): Record<string, { tags: string[]; summary: string }> {
+type Parsed = { tags: string[]; summary: string; importance?: number; kind?: string }
+
+function parseTags(text: string): Record<string, Parsed> {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) return {}
   try {
-    const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, { tags?: unknown; summary?: unknown }>
-    const out: Record<string, { tags: string[]; summary: string }> = {}
+    const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, { tags?: unknown; summary?: unknown; importance?: unknown; kind?: unknown }>
+    const out: Record<string, Parsed> = {}
     for (const [id, v] of Object.entries(raw)) {
       const tags = Array.isArray(v?.tags) ? v.tags.map(t => String(t).trim()).filter(Boolean).slice(0, 5) : []
-      if (tags.length) out[id] = { tags, summary: String(v?.summary ?? '').slice(0, 80) }
+      const imp = Math.round(Number(v?.importance))
+      const kind = String(v?.kind ?? '')
+      if (tags.length)
+        out[id] = {
+          tags,
+          summary: String(v?.summary ?? '').slice(0, 80),
+          importance: imp >= 1 && imp <= 5 ? imp : undefined,
+          kind: (KINDS as readonly string[]).includes(kind) ? kind : '기타',
+        }
     }
     return out
   } catch {
@@ -96,7 +111,9 @@ export async function refreshBrain($: EngineInterface) {
     const stored = await $.store.get(TAGS_KEY)
     const tags: Record<string, Tagged> = stored && typeof stored === 'object' ? { ...(stored as Record<string, Tagged>) } : {}
 
-    const todo = convs.filter(c => !tags[c.id] || c.userMsgs - (tags[c.id] as Tagged).atMsgs >= RETAG_AFTER)
+    const todo = convs.filter(
+      c => !tags[c.id] || !(tags[c.id] as Tagged).kind || c.userMsgs - (tags[c.id] as Tagged).atMsgs >= RETAG_AFTER,
+    )
     let failed = 0
     for (let i = 0; i < todo.length; i += BATCH) {
       const batch = todo.slice(i, i + BATCH)
@@ -161,6 +178,7 @@ function foldNodes(convs: Conv[], tags: Record<string, Tagged>): BrainNode[] {
   for (const c of convs) {
     const t = tags[c.id]
     const last = Date.parse(c.lastAt ?? '') || c.mtimeMs
+    const first = Date.parse(c.startedAt ?? '') || last
     const connectors = [...new Set(c.tools.map(connectorOf).filter((x): x is string => Boolean(x)))]
     const key = c.title.trim()
     const prev = byTitle.get(key)
@@ -169,6 +187,9 @@ function foldNodes(convs: Conv[], tags: Record<string, Tagged>): BrainNode[] {
       prev.count += 1
       prev.userMsgs += c.userMsgs
       prev.lastAt = Math.max(prev.lastAt, last)
+      prev.firstAt = Math.min(prev.firstAt, first)
+      prev.importance = Math.max(prev.importance ?? 0, t?.importance ?? 0) || undefined
+      prev.kind = prev.kind ?? t?.kind
       prev.tags = [...new Set([...prev.tags, ...(t?.tags ?? [])])].slice(0, 6)
       prev.connectors = [...new Set([...prev.connectors, ...connectors])]
       if (!prev.summary && t?.summary) prev.summary = t.summary
@@ -179,10 +200,13 @@ function foldNodes(convs: Conv[], tags: Record<string, Tagged>): BrainNode[] {
         ids: [c.id],
         count: 1,
         userMsgs: c.userMsgs,
+        firstAt: first,
         lastAt: last,
         tags: t?.tags ?? [],
         summary: t?.summary ?? '',
         connectors,
+        importance: t?.importance,
+        kind: t?.kind,
       })
     }
   }
@@ -401,6 +425,20 @@ export function brainTree(view: BrainView | null, now: number, els: BrainEls, on
   }
 
   const { colors, ranked } = tagColors(view.nodes)
+  const insight = computeInsight(view.nodes)
+  const stat = (label: string, value: string, sub: string, color: string) => (
+    <Box flexDirection="column" flexGrow={1} padding="sm" borderStyle="round" borderColor={pal.border} backgroundColor={pal.chip}>
+      <Text size="caption" color={pal.faint}>
+        {label}
+      </Text>
+      <Text size="title" weight="bold" color={color} tabular>
+        {value}
+      </Text>
+      <Text size="caption" color={pal.sub}>
+        {sub}
+      </Text>
+    </Box>
+  )
   const current = view.nodes.find(nd => nd.ids.includes(view.currentId))
   const related = current
     ? view.nodes
@@ -438,6 +476,34 @@ export function brainTree(view: BrainView | null, now: number, els: BrainEls, on
   return (
     <Box flexDirection="column" gap="md" paddingY="sm">
       {header}
+
+      {insight
+        ? card(
+            '일잘러 점검',
+            `대화 ${insight.total}개 기준`,
+            <Box flexDirection="column" gap="sm">
+              <Box flexDirection="row" gap="sm">
+                {stat('맥락 이어가기', `${insight.continuity.rate}%`, `${insight.continuity.continued}개가 앞선 일과 이어짐`, insight.continuity.rate >= 60 ? '#34d399' : insight.continuity.rate >= 40 ? '#fbbf24' : '#fb7185')}
+                {stat('일의 흐름', `${insight.flows.count}개`, `따로 떨어진 대화 ${insight.flows.isolated}개`, '#38bdf8')}
+                {stat('중요한 일 비중', `${insight.focus.importantShare}%`, `중요도 4 이상 ${insight.focus.importantCount}개`, insight.focus.importantShare >= 50 ? '#34d399' : '#fbbf24')}
+              </Box>
+              {insight.flows.names.length ? (
+                <Text size="caption" color={pal.faint}>
+                  큰 흐름: {insight.flows.names.map(t => `#${t}`).join(' · ')}
+                </Text>
+              ) : null}
+              {Svg ? <Svg source={focusSvg(view.nodes, pal)} alt="중요도와 들인 대화량 4칸 그래프" isInteractive /> : null}
+              {Svg ? <Svg source={kindSvg(insight.byKind, pal)} alt="일의 종류별 대화량 비중" isInteractive /> : null}
+              <Box flexDirection="column" gap="xs">
+                {insight.notes.map(line => (
+                  <Text size="footnote" color={pal.text}>
+                    · {line}
+                  </Text>
+                ))}
+              </Box>
+            </Box>,
+          )
+        : null}
 
       {card(
         '연결 지도',
@@ -544,6 +610,7 @@ export async function readBrain($: EngineInterface) {
 // ─── the desktop window ────────────────────────────────────────────────────
 
 export type BrainExport = {
+  insight: (ReturnType<typeof computeInsight> & { focusSvg: string; kindSvg: string }) | null
   status: string
   isBusy: boolean
   total: number
@@ -578,7 +645,9 @@ export function brainExport(view: BrainView | null, now: number): BrainExport | 
         }))
     : []
 
+  const ins = computeInsight(view.nodes)
   return {
+    insight: ins ? { ...ins, focusSvg: focusSvg(view.nodes, DARK), kindSvg: kindSvg(ins.byKind, DARK) } : null,
     status: view.status,
     isBusy: view.isBusy,
     total: view.nodes.reduce((a, nd) => a + nd.count, 0),

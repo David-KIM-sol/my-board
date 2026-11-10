@@ -408,10 +408,12 @@ async function applySetting($: EngineInterface, key: string, value: string, labe
 
 // ─── the desktop window ─────────────────────────────────────────────────────
 // The board also lives outside Claude: window/board.html, opened by the
-// "Claude 보드" app, reloads board-data.js, which this writes every few seconds.
+// "Claude 보드" app. Every session writes its own sessions/<id>.js and its
+// line in index.js; the window shows the whole picture and each session apart.
 
 let lastDesktop = ''
 let lastDesktopAt = 0
+const INDEX_PREFIX = 'window.MY_BOARD_INDEX = '
 
 async function desktopDir($: EngineInterface) {
   const home = (await $.env.get('HOME')) ?? ''
@@ -427,6 +429,22 @@ async function installViewer($: EngineInterface) {
   }
 }
 
+type IndexEntry = { writtenAt: number; title: string }
+
+async function writeIndex($: EngineInterface, dir: string, id: string, entry: IndexEntry, now: number) {
+  let sessions: Record<string, IndexEntry> = {}
+  try {
+    const text = await $.fs.read(`${dir}/index.js`)
+    const body = text.startsWith(INDEX_PREFIX) ? text.slice(INDEX_PREFIX.length).trim().replace(/;$/, '') : '{}'
+    sessions = (JSON.parse(body) as { sessions?: Record<string, IndexEntry> }).sessions ?? {}
+  } catch {
+    sessions = {}
+  }
+  sessions[id] = entry
+  for (const [k, v] of Object.entries(sessions)) if (now - v.writtenAt > 24 * 3_600_000) delete sessions[k]
+  await $.fs.write(`${dir}/index.js`, `${INDEX_PREFIX}${JSON.stringify({ sessions })};\n`)
+}
+
 async function writeDesktop($: EngineInterface) {
   try {
     const board = await read($, data)
@@ -434,24 +452,31 @@ async function writeDesktop($: EngineInterface) {
     const act = await readActivity($)
     const view = await readBrain($)
     const now = await $.clock.now()
-    const ringRows: RingRow[] = [
-      ...(['five_hour', 'seven_day'] as const).map(kind => {
-        const l = board.limits.find(x => x.kind === kind)
-        return { key: kind, label: RINGS[kind]?.label ?? kind, percent: l?.percent ?? 0, sub: l ? untilText(l.resetsAt, now) : '응답 후 표시' }
-      }),
-      { key: 'context', label: '컨텍스트', percent: board.context.percent, sub: `${kTokens(board.context.tokens)} / ${kTokens(board.context.window)}` },
-    ]
+    const id = await $.session.id()
+    const limitRows: RingRow[] = (['five_hour', 'seven_day'] as const).map(kind => {
+      const l = board.limits.find(x => x.kind === kind)
+      return { key: kind, label: RINGS[kind]?.label ?? kind, percent: l?.percent ?? 0, sub: l ? untilText(l.resetsAt, now) : '응답 후 표시' }
+    })
+    const ctxRow: RingRow = {
+      key: 'context',
+      label: '컨텍스트',
+      percent: board.context.percent,
+      sub: `${kTokens(board.context.tokens)} / ${kTokens(board.context.window)}`,
+    }
+    const title = view?.nodes.find(nd => nd.ids.includes(id))?.title ?? act.prompt ?? '이름 없는 대화'
     const payload = {
-      at: board.at,
+      id,
+      title,
       writtenAt: now,
+      limitsAt: board.at,
+      brainAt: view && view.nodes.length ? view.at : 0,
       model: board.context.model,
       costUsd: board.costUsd ?? 0,
-      status: statusLine(board),
       limits: board.limits,
       context: { tokens: board.context.tokens, window: board.context.window, percent: board.context.percent },
-      settings: board.settings,
       svgs: {
-        rings: ringsSvg(ringRows, DARK),
+        limits: ringsSvg(limitRows, DARK),
+        session: ringsSvg([...limitRows, ctxRow], DARK),
         context: contextSvg(board.context, DARK),
         trend: trendSvg(board.history, now, DARK),
       },
@@ -460,11 +485,16 @@ async function writeDesktop($: EngineInterface) {
       brain: brainExport(view, now),
     }
     const body = JSON.stringify(payload)
-    const key = body.replace(/"writtenAt":\d+,/, '')
+    const key = body.replace(/"writtenAt":\d+,/, '').replace(/"trend":"(?:[^"\\]|\\.)*"/, '')
     if (key === lastDesktop && now - lastDesktopAt < 30_000) return
     lastDesktop = key
     lastDesktopAt = now
-    await $.fs.write(`${await desktopDir($)}/board-data.js`, `window.MY_BOARD = ${body};\n`)
+    const dir = await desktopDir($)
+    await $.fs.write(
+      `${dir}/sessions/${id}.js`,
+      `window.MY_BOARD_SESSIONS = window.MY_BOARD_SESSIONS || {};\nwindow.MY_BOARD_SESSIONS[${JSON.stringify(id)}] = ${body};\n`,
+    )
+    await writeIndex($, dir, id, { writtenAt: now, title }, now)
   } catch {
     // as above
   }
