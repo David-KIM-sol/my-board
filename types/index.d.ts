@@ -46,7 +46,7 @@ export type Conv = {
   size: number
 }
 /** What the model made of a conversation, kept in $.store. */
-export type Tagged = { tags: string[]; summary: string; atMsgs: number }
+export type Tagged = { tags: string[]; summary: string; atMsgs: number; importance?: number; kind?: string }
 /** Conversations with the same title folded into one node. */
 export type BrainNode = {
   key: string
@@ -54,10 +54,13 @@ export type BrainNode = {
   ids: string[]
   count: number
   userMsgs: number
+  firstAt: number
   lastAt: number
   tags: string[]
   summary: string
   connectors: string[]
+  importance?: number
+  kind?: string
 }
 export type BrainView = {
   at: number
