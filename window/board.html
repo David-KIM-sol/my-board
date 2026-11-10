@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude 보드</title>
+<style>
+  :root {
+    --bg: #0b0d13;
+    --bg2: #11141d;
+    --card: rgba(255, 255, 255, 0.035);
+    --card-hi: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #eef0f6;
+    --sub: #9097a8;
+    --faint: #7d8497;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --hot: #fb7185;
+    --violet: #a78bfa;
+    --cyan: #38bdf8;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(56, 189, 248, 0.10), transparent 60%),
+      radial-gradient(900px 500px at 110% 10%, rgba(167, 139, 250, 0.10), transparent 60%),
+      linear-gradient(180deg, var(--bg2), var(--bg));
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 18px 28px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; font-weight: 750; }
+  .meta { color: var(--faint); font-size: 12px; margin-top: 2px; }
+  .live { text-align: right; font-size: 12px; white-space: nowrap; }
+  .live .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  .live.on .dot { background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; }
+  .live.off .dot { background: var(--faint); }
+  .live.on .label { color: var(--ok); }
+  .live.off .label { color: var(--sub); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); } 70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+  @media (prefers-reduced-motion: reduce) { .live.on .dot { animation: none; } }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  @media (min-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px 16px 16px;
+    backdrop-filter: blur(12px);
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .card:hover { border-color: rgba(255, 255, 255, 0.14); background: var(--card-hi); }
+  .card h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--sub); display: flex; justify-content: space-between; gap: 8px; }
+  .card h2 .right { color: var(--faint); font-weight: 500; }
+  .svg { width: 100%; }
+  .svg svg { width: 100%; max-width: 440px; height: auto; display: block; margin: 0 auto; }
+
+  .status { font-weight: 650; font-size: 15px; }
+  .status.work { color: var(--warn); }
+  .status.idle { color: var(--ok); }
+  .prompt { color: var(--sub); font-size: 12.5px; margin: 4px 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label-sm { color: var(--faint); font-size: 11.5px; margin: 10px 0 4px; }
+  .plan, .acts, .list { list-style: none; margin: 0; padding: 0; }
+  .plan li { display: flex; gap: 8px; font-size: 13px; padding: 2px 0; }
+  .plan .i { width: 14px; text-align: center; }
+  .plan .done { color: var(--faint); }
+  .plan .now { font-weight: 650; }
+  .acts li { display: grid; grid-template-columns: 44px auto 1fr; gap: 8px; font-size: 12.5px; padding: 2px 0; align-items: baseline; }
+  .acts .t { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .acts .l { color: var(--sub); white-space: nowrap; }
+  .acts .l.run { color: var(--warn); }
+  .acts .d { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.03); font-size: 12.5px; }
+  .chip .n { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .chip .g { color: var(--ok); font-size: 9px; }
+  .group { color: var(--faint); font-size: 11.5px; margin: 8px 0 4px; }
+  .group:first-child { margin-top: 0; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-top: 6px; }
+  .rel li, .list li { padding: 6px 0; border-top: 1px solid rgba(255, 255, 255, 0.05); }
+  .rel li:first-child, .list li:first-child { border-top: 0; padding-top: 0; }
+  .rel, .list { list-style: none; margin: 0; padding: 0; }
+  .ttl { font-weight: 650; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+  .ttl .when { color: var(--faint); font-weight: 400; font-size: 12px; white-space: nowrap; }
+  .ttl.cur { color: var(--ok); }
+  .sum { color: var(--sub); font-size: 12.5px; }
+  .tags { color: var(--faint); font-size: 12px; }
+  .note { color: var(--faint); font-size: 11.5px; margin-top: 16px; text-align: center; }
+  .empty { color: var(--sub); text-align: center; padding: 80px 20px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">보드를 불러오는 중…</div></div>
+<script>
+(function () {
+  var last = '';
+  var data = null;
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function card(title, right) {
+    var c = el('section', 'card');
+    var h = el('h2');
+    h.appendChild(el('span', '', title));
+    if (right) h.appendChild(el('span', 'right', right));
+    c.appendChild(h);
+    return c;
+  }
+  function svgBox(markup) {
+    var d = el('div', 'svg');
+    d.innerHTML = markup || '';
+    return d;
+  }
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function clock(t) { var d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function elapsed(ms) {
+    var s = Math.max(0, Math.round(ms / 1000)), m = Math.floor(s / 60);
+    return m > 0 ? m + '분 ' + (s % 60) + '초' : s + '초';
+  }
+  function ago(ms) {
+    var m = Math.floor(ms / 60000);
+    if (m < 1) return '방금';
+    if (m < 60) return m + '분 전';
+    var h = Math.floor(m / 60);
+    return h < 24 ? h + '시간 전' : Math.floor(h / 24) + '일 전';
+  }
+
+  function liveBadge(d) {
+    var on = Date.now() - (d.writtenAt || 0) < 90000;
+    var box = el('div', 'live ' + (on ? 'on' : 'off'));
+    var line = el('div');
+    line.appendChild(el('span', 'dot'));
+    line.appendChild(el('span', 'label', on ? '실시간' : 'Claude Code가 꺼져 있어요'));
+    box.appendChild(line);
+    box.appendChild(el('div', 'meta', (on ? clock(d.at) + ' 갱신' : '마지막 갱신 ' + ago(Date.now() - d.at))));
+    box.id = 'live';
+    return box;
+  }
+
+  function activityCard(a) {
+    var c = card('지금 하는 일');
+    var st = el('div', 'status ' + (a.isWorking ? 'work' : 'idle'));
+    st.id = 'act-status';
+    c.appendChild(st);
+    if (a.prompt) c.appendChild(el('div', 'prompt', '요청: ' + a.prompt));
+    if (a.plan && a.plan.length) {
+      var done = a.plan.filter(function (p) { return p.status === 'completed'; }).length;
+      c.appendChild(el('div', 'label-sm', '단계 ' + done + '/' + a.plan.length));
+      var ul = el('ul', 'plan');
+      a.plan.forEach(function (p) {
+        var li = el('li', p.status === 'completed' ? 'done' : p.status === 'in_progress' ? 'now' : '');
+        var i = el('span', 'i', p.status === 'completed' ? '✔' : p.status === 'in_progress' ? '▶' : '○');
+        i.style.color = p.status === 'completed' ? 'var(--ok)' : p.status === 'in_progress' ? 'var(--warn)' : 'var(--faint)';
+        li.appendChild(i);
+        li.appendChild(el('span', '', p.content));
+        ul.appendChild(li);
+      });
+      c.appendChild(ul);
+    }
+    var recent = (a.tools || []).slice(-6).reverse();
+    if (recent.length) {
+      c.appendChild(el('div', 'label-sm', '최근 동작'));
+      var ul2 = el('ul', 'acts');
+      recent.forEach(function (t) {
+        var li = el('li');
+        li.appendChild(el('span', 't', clock(t.at)));
+        li.appendChild(el('span', 'l' + (t.endedAt ? '' : ' run'), (t.endedAt ? '· ' : '… ') + t.label));
+        li.appendChild(el('span', 'd', t.detail || ''));
+        ul2.appendChild(li);
+      });
+      c.appendChild(ul2);
+    } else {
+      c.appendChild(el('div', 'label-sm', '아직 기록된 동작이 없어요'));
+    }
+    return c;
+  }
+
+  function updateClock() {
+    if (!data) return;
+    var a = data.activity || {};
+    var st = document.getElementById('act-status');
+    if (st) {
+      st.textContent = a.isWorking
+        ? '◉ 작업 중 · ' + elapsed(Date.now() - (a.turnStartedAt || Date.now()))
+        : '● 대기' + (a.lastDurationMs != null ? ' · 마지막 작업 ' + elapsed(a.lastDurationMs) : '');
+    }
+    var live = document.getElementById('live');
+    if (live) live.replaceWith(liveBadge(data));
+  }
+
+  function connectorsCard(list) {
+    var c = card('연결된 데이터', list.length + '곳');
+    var order = ['문서·노트', '파일', '소통·일정', '디자인', '데이터', '브라우저·자동화', '기타'];
+    order.forEach(function (g) {
+      var items = list.filter(function (x) { return x.group === g; });
+      if (!items.length) return;
+      c.appendChild(el('div', 'group', g));
+      var row = el('div', 'chips');
+      items.forEach(function (x) {
+        var ch = el('span', 'chip');
+        ch.appendChild(el('span', 'g', '●'));
+        ch.appendChild(el('span', '', x.name));
+        ch.appendChild(el('span', 'n', String(x.tools)));
+        row.appendChild(ch);
+      });
+      c.appendChild(row);
+    });
+    return c;
+  }
+
+  function brainCards(b) {
+    var out = [];
+    if (!b) {
+      var c0 = card('세컨드 브레인');
+      c0.appendChild(el('div', 'sum', 'Claude Code의 보드에서 세컨드 브레인을 한 번 정리하면 여기에도 나타나요.'));
+      return [c0];
+    }
+    var m = card('세컨드 브레인 · 연결 지도', '대화 ' + b.total + '개');
+    m.appendChild(svgBox(b.mapSvg));
+    var lg = el('div', 'legend');
+    (b.legend || []).forEach(function (pair) {
+      var s = el('span', '', '● ' + pair[0]);
+      s.style.color = pair[1];
+      lg.appendChild(s);
+    });
+    m.appendChild(lg);
+    out.push(m);
+
+    if (b.related && b.related.length) {
+      var r = card('지금 대화와 이어진 대화');
+      var ul = el('ul', 'rel');
+      b.related.forEach(function (x) {
+        var li = el('li');
+        li.appendChild(el('div', 'ttl', x.title));
+        li.appendChild(el('div', 'tags', x.reason));
+        ul.appendChild(li);
+      });
+      r.appendChild(ul);
+      out.push(r);
+    }
+
+    if (b.topics && b.topics.length) {
+      var t = card('자주 다룬 주제');
+      var row = el('div', 'chips');
+      var colors = {};
+      (b.legend || []).forEach(function (p) { colors[p[0]] = p[1]; });
+      b.topics.forEach(function (p) {
+        var ch = el('span', 'chip');
+        var name = el('span', '', '#' + p[0]);
+        if (colors[p[0]]) { name.style.color = colors[p[0]]; ch.style.borderColor = colors[p[0]]; }
+        ch.appendChild(name);
+        ch.appendChild(el('span', 'n', String(p[1])));
+        row.appendChild(ch);
+      });
+      t.appendChild(row);
+      out.push(t);
+    }
+
+    var l = card('대화 목록', '최근 순');
+    var ul2 = el('ul', 'list');
+    (b.list || []).forEach(function (x) {
+      var li = el('li');
+      var tt = el('div', 'ttl' + (x.isCurrent ? ' cur' : ''));
+      tt.appendChild(el('span', '', x.title));
+      tt.appendChild(el('span', 'when', x.when));
+      li.appendChild(tt);
+      if (x.summary) li.appendChild(el('div', 'sum', x.summary));
+      if (x.tags && x.tags.length) li.appendChild(el('div', 'tags', x.tags.map(function (s) { return '#' + s; }).join(' ')));
+      ul2.appendChild(li);
+    });
+    l.appendChild(ul2);
+    out.push(l);
+    return out;
+  }
+
+  function render(d) {
+    var app = document.getElementById('app');
+    var scroll = window.scrollY;
+    app.innerHTML = '';
+
+    var head = el('header');
+    var left = el('div');
+    left.appendChild(el('h1', '', 'Claude 보드'));
+    left.appendChild(el('div', 'meta', (d.model || '') + ' · 세션 비용 $' + Number(d.costUsd || 0).toFixed(2) + ' · ' + (d.status || '')));
+    head.appendChild(left);
+    head.appendChild(liveBadge(d));
+    app.appendChild(head);
+
+    var grid = el('div', 'grid');
+    var c1 = el('div', 'col');
+    var c2 = el('div', 'col');
+    c1.appendChild(activityCard(d.activity || {}));
+    var u = card('사용량'); u.appendChild(svgBox(d.svgs && d.svgs.rings)); c1.appendChild(u);
+    var cx = card('컨텍스트 구성', d.context ? Math.round(d.context.tokens / 1000) + 'K / ' + Math.round(d.context.window / 1000) + 'K · ' + d.context.percent + '%' : '');
+    cx.appendChild(svgBox(d.svgs && d.svgs.context)); c1.appendChild(cx);
+    var tr = card('추이'); tr.appendChild(svgBox(d.svgs && d.svgs.trend)); c1.appendChild(tr);
+    brainCards(d.brain).forEach(function (c) { c2.appendChild(c); });
+    c2.appendChild(connectorsCard(d.connectors || []));
+    grid.appendChild(c1);
+    grid.appendChild(c2);
+    app.appendChild(grid);
+    app.appendChild(el('div', 'note', '보기 전용 창이에요 · 설정 바꾸기와 세컨드 브레인 다시 정리는 Claude Code 안의 보드에서 할 수 있어요'));
+    updateClock();
+    window.scrollTo(0, scroll);
+  }
+
+  function load() {
+    var s = document.createElement('script');
+    s.src = 'board-data.js?t=' + Date.now();
+    s.onload = function () {
+      var d = window.MY_BOARD;
+      s.remove();
+      if (!d) return;
+      var key = JSON.stringify(d).replace(/"writtenAt":\d+,/, '');
+      data = d;
+      if (key !== last) { last = key; render(d); } else { updateClock(); }
+    };
+    s.onerror = function () {
+      s.remove();
+      if (!data) document.getElementById('app').innerHTML = '<div class="empty">아직 보드 데이터가 없어요.<br>Claude 앱의 Code 탭에서 대화를 한 번 시작하면 채워집니다.</div>';
+    };
+    document.head.appendChild(s);
+  }
+
+  load();
+  setInterval(load, 4000);
+  setInterval(updateClock, 1000);
+})();
+</script>
+</body>
+</html>
