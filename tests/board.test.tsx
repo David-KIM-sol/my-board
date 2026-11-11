@@ -83,6 +83,10 @@ const BRAIN = {
   isBusy: false,
   currentId: 'board',
   theme: 'dark',
+  priorities: {
+    deadlines: [{ date: new Date(NOW + 10 * 86_400_000).toISOString().slice(0, 10), name: '자료 넘기기', words: ['인수인계'] }],
+    watch: [{ name: '책 쓰기', words: ['집필'] }],
+  },
   nodes: [
     node('보드 만들기', ['모드 개발', '사용량', '노션 정리'], ['Notion'], { ids: ['board'], firstAt: NOW, importance: 4, kind: '도구·자동화', userMsgs: 30 }),
     node('녹음 전사', ['녹음 전사', '회의록'], ['Plaud', 'Notion'], { firstAt: NOW - 5 * 86_400_000, importance: 5, kind: '핵심 업무', userMsgs: 3 }),
@@ -104,6 +108,8 @@ test('the brain pane draws its map and lists', async ($, on) => {
     const ui = await $.ui.mount({ ...PANE, requestId: 'my-brain', props: { ...PANE.props, title: '세컨드 브레인' }, surface })
     expect((await ui.find({ type: 'Text', text: /^세컨드 브레인$/ }))?.text).toBe('세컨드 브레인')
     expect((await ui.find({ type: 'Text', text: /^일잘러 점검$/ }))?.text).toBe('일잘러 점검')
+    expect((await ui.find({ type: 'Text', text: /자료 넘기기: .*마감/ }))?.text).toMatch(/관련 대화가 0개/)
+    expect((await ui.find({ type: 'Text', text: /책 쓰기/ }))?.text).toMatch(/아직 관련 대화가 없어요/)
     expect((await ui.find({ type: 'Text', text: /녹음 전사 요약/ }))?.text).toBe('녹음 전사 요약')
     if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBe(3)
     await ui.unmount()
