@@ -62,7 +62,11 @@ export type BrainNode = {
   importance?: number
   kind?: string
 }
+export type Deadline = { date: string; name: string; words: string[] }
+export type Watch = { name: string; words: string[] }
+export type Priorities = { deadlines: Deadline[]; watch: Watch[] }
 export type BrainView = {
+  priorities?: Priorities
   at: number
   status: string
   isBusy: boolean
