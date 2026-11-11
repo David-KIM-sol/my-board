@@ -6,7 +6,7 @@ import type { BoardData, Connector, Limit, Sample, Segment, Settings } from '../
 import { CONNECTORS, DARK, FONT, GROUP_ORDER, UUID, clockText, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
 import { activityBody, readActivity, onToolEnd, onToolStart, onTurnEnd, onTurnStart, tick } from './activity'
-import { BRAIN_PANE, BRAIN_TITLE, brainExport, brainTree, readBrain, refreshBrain } from './brain'
+import { BRAIN_PANE, BRAIN_TITLE, brainExport, brainTree, prioritiesPath, readBrain, refreshBrain } from './brain'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -507,6 +507,7 @@ export const register: Register = on => {
     const result = await next(e)
     await $.command.register({ name: 'board', description: 'Claude 보드를 열고 값을 새로 읽기' })
     await $.command.register({ name: 'brain', description: '세컨드 브레인: 내 대화들 사이의 연결 보기' })
+    await $.command.register({ name: 'priorities', description: '일잘러 점검이 읽는 내 우선순위 파일 열기' })
     void $.ui.open({ id: PANE, title: TITLE })
     await refresh($)
     $.clock.every(4000, () => void tick($))
@@ -535,6 +536,17 @@ export const register: Register = on => {
     void refreshBrain($)
 
     return { text: opened.isPlaced ? '세컨드 브레인을 열었어요. 새 대화가 있으면 정리합니다.' : '세컨드 브레인을 그릴 화면이 없어요.' }
+  })
+
+  on('command.run', { command: 'priorities' }, async $ => {
+    const path = await prioritiesPath($)
+    const r = await $.process.run(['/usr/bin/open', '-t', path])
+    return {
+      text:
+        r.exitCode === 0
+          ? `우선순위 파일을 열었어요: ${path}\n고친 뒤 세컨드 브레인의 "다시 정리"를 누르면 모든 대화를 새 기준으로 다시 매깁니다.`
+          : `파일을 열지 못했어요. 세컨드 브레인을 한 번 정리하면 파일이 만들어집니다: ${path}`,
+    }
   })
 
   on('turn.start', async ($, e, next) => {

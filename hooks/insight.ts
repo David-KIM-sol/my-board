@@ -4,7 +4,7 @@
 
 import { FONT, esc } from './common'
 import type { Palette } from './common'
-import type { BrainNode } from '../types'
+import type { BrainNode, Priorities } from '../types'
 
 export const KINDS = ['핵심 업무', '운영·행정', '일정·할 일', '도구·자동화', '배움·탐색', '개인'] as const
 export const KIND_COLORS: Record<string, string> = {
@@ -35,7 +35,7 @@ const median = (xs: number[]) => {
   return s.length % 2 ? (s[m] as number) : ((s[m - 1] as number) + (s[m] as number)) / 2
 }
 
-export function computeInsight(nodes: BrainNode[]): Insight | null {
+export function computeInsight(nodes: BrainNode[], pri?: Priorities, now: number = Date.now()): Insight | null {
   const rated = nodes.filter(n => n.tags.length > 0)
   if (rated.length < 3) return null
 
@@ -77,6 +77,31 @@ export function computeInsight(nodes: BrainNode[]): Insight | null {
 
   const rate = Math.round((100 * continued) / comparable)
   const notes: string[] = []
+
+  // 마감과 미뤄지는 일: the priorities file names them, the conversations show whether they got attention.
+  const about = (n: BrainNode, ws: string[]) => {
+    const hay = `${n.title} ${n.tags.join(' ')} ${n.summary}`
+    return ws.some(w => w && hay.includes(w))
+  }
+  for (const d of pri?.deadlines ?? []) {
+    const due = Date.parse(`${d.date}T23:59:59`)
+    const left = Math.ceil((due - now) / 86_400_000)
+    if (!Number.isFinite(left) || left < 0 || left > 45) continue
+    const recent = nodes.filter(n => about(n, d.words) && now - n.lastAt < 14 * 86_400_000).length
+    const when = `${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8, 10))}`
+    notes.push(
+      recent <= 1
+        ? `⏰ ${d.name}: ${when} 마감(${left}일 남음)인데 최근 2주 관련 대화가 ${recent}개예요. 오늘 시작할 일 하나를 정해 보세요.`
+        : `⏰ ${d.name}: ${when} 마감까지 ${left}일 · 최근 2주 관련 대화 ${recent}개`,
+    )
+  }
+  for (const w of pri?.watch ?? []) {
+    const lastSeen = Math.max(0, ...nodes.filter(n => about(n, w.words)).map(n => n.lastAt))
+    const days = lastSeen ? Math.floor((now - lastSeen) / 86_400_000) : -1
+    if (days < 0) notes.push(`🐢 ${w.name}: 아직 관련 대화가 없어요.`)
+    else if (days > 30) notes.push(`🐢 ${w.name}: ${days}일째 관련 대화가 없어요.`)
+  }
+
   if (rate < 40) notes.push(`새 대화의 ${100 - rate}%가 앞선 대화와 이어지지 않아요. 비슷한 일은 이전 대화를 이어서 하거나 인수인계 문서로 맥락을 넘겨 보세요.`)
   else if (rate >= 70) notes.push(`새 대화의 ${rate}%가 앞선 일과 이어져요. 맥락을 잘 쌓고 있어요.`)
   else notes.push(`새 대화의 ${rate}%가 앞선 일과 이어져요. 따로 떨어진 대화 ${isolated}개가 다른 흐름과 이어지는지 살펴보세요.`)

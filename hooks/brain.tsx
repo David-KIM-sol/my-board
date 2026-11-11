@@ -8,13 +8,59 @@ import type { BoxProps, ButtonProps, ElementConstructor, EngineInterface, SvgPro
 import { DARK, FONT, connectorOf, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
 import { KINDS, computeInsight, focusSvg, kindSvg } from './insight'
-import type { BrainNode, BrainView, Conv, Tagged } from '../types'
+import type { BrainNode, BrainView, Conv, Priorities, Tagged } from '../types'
 
 export const BRAIN_PANE = 'my-brain'
 export const BRAIN_TITLE = '세컨드 브레인'
 const TAGS_KEY = 'brain-tags-v1'
 const BATCH = 8
 const RETAG_AFTER = 6
+const PRIORITY_HASH_KEY = 'priorities-hash-v1'
+
+export async function prioritiesPath($: EngineInterface) {
+  const home = (await $.env.get('HOME')) ?? ''
+  return `${home}/Library/Application Support/my-board/priorities.md`
+}
+
+/** The person's own priorities, kept on this computer; the example is copied in the first time. */
+async function readPriorities($: EngineInterface) {
+  const path = await prioritiesPath($)
+  try {
+    return await $.fs.read(path)
+  } catch {
+    try {
+      const example = await $.fs.read(`${$.plugin.root}/priorities.example.md`)
+      await $.fs.write(path, example)
+      return example
+    } catch {
+      return ''
+    }
+  }
+}
+
+const words = (s: string) => s.split(/[,，]/).map(w => w.trim()).filter(Boolean)
+
+function parsePriorities(text: string): Priorities {
+  const section = (title: string) => {
+    const m = text.match(new RegExp(`##\\s*${title}[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)`))
+    return (m?.[1] ?? '').split('\n').filter(l => l.trim().startsWith('- '))
+  }
+  const deadlines = section('마감')
+    .map(l => l.replace(/^\s*-\s*/, '').split('|').map(x => x.trim()))
+    .filter(p => /^\d{4}-\d{2}-\d{2}$/.test(p[0] ?? '') && p[1])
+    .map(p => ({ date: p[0] as string, name: p[1] as string, words: words(p[2] ?? p[1] ?? '') }))
+  const watch = section('미뤄지지 않게 볼 일')
+    .map(l => l.replace(/^\s*-\s*/, '').split('|').map(x => x.trim()))
+    .filter(p => p[0])
+    .map(p => ({ name: p[0] as string, words: words(p[1] ?? p[0] ?? '') }))
+  return { deadlines, watch }
+}
+
+function hashText(s: string) {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
+  return String(h >>> 0)
+}
 
 export const brain = atom({ plugin: 'my-board', key: 'brain' } as const, null, { shape: 'brain-2' })
 
@@ -33,7 +79,7 @@ async function readConversations($: EngineInterface): Promise<Conv[]> {
     .map(line => JSON.parse(line) as Conv)
 }
 
-function promptFor(convs: Conv[], vocabulary: string[]) {
+function promptFor(convs: Conv[], vocabulary: string[], priorities: string) {
   const items = convs.map(c => {
     const connectors = [...new Set(c.tools.map(connectorOf).filter(Boolean))].join(', ')
     return [
@@ -60,6 +106,11 @@ function promptFor(convs: Conv[], vocabulary: string[]) {
   대화가 길다고 중요한 것이 아닙니다. 일 자체의 중요도로만 판단하세요.
 - kind: 다음 중 하나: ${KINDS.join(', ')}
 
+${priorities ? `중요도는 반드시 아래 이 사람의 우선순위에 비추어 매기세요. 여기 적힌 중요도 단계를 그대로 따르세요.
+<우선순위>
+${priorities.replace(/<!--[\s\S]*?-->/g, '').slice(0, 3000)}
+</우선순위>
+` : ''}
 반드시 JSON 하나로만 답하세요. 형식:
 {"<대화 id>": {"tags": ["태그1", "태그2"], "summary": "요약", "importance": 4, "kind": "핵심 업무"}}
 
@@ -111,8 +162,15 @@ export async function refreshBrain($: EngineInterface) {
     const stored = await $.store.get(TAGS_KEY)
     const tags: Record<string, Tagged> = stored && typeof stored === 'object' ? { ...(stored as Record<string, Tagged>) } : {}
 
+    const priorities = await readPriorities($)
+    const pHash = hashText(priorities)
+    const pChanged = (await $.store.get(PRIORITY_HASH_KEY)) !== pHash
     const todo = convs.filter(
-      c => !tags[c.id] || !(tags[c.id] as Tagged).kind || c.userMsgs - (tags[c.id] as Tagged).atMsgs >= RETAG_AFTER,
+      c =>
+        pChanged ||
+        !tags[c.id] ||
+        !(tags[c.id] as Tagged).kind ||
+        c.userMsgs - (tags[c.id] as Tagged).atMsgs >= RETAG_AFTER,
     )
     let failed = 0
     for (let i = 0; i < todo.length; i += BATCH) {
@@ -121,7 +179,7 @@ export async function refreshBrain($: EngineInterface) {
       const vocabulary = topTags(tags, 40)
       const r = await $.model.complete({
         model: 'haiku',
-        prompt: promptFor(batch, vocabulary),
+        prompt: promptFor(batch, vocabulary, priorities),
         maxTokens: 2500,
         timeoutMs: 90_000,
       })
@@ -137,6 +195,7 @@ export async function refreshBrain($: EngineInterface) {
       }
       await $.store.set(TAGS_KEY, tags)
     }
+    if (!failed) await $.store.set(PRIORITY_HASH_KEY, pHash)
 
     const currentId = await $.session.id()
     const theme = await themeOf($)
@@ -148,6 +207,7 @@ export async function refreshBrain($: EngineInterface) {
       currentId,
       nodes: foldNodes(convs, tags),
       theme,
+      priorities: parsePriorities(priorities),
     }
     await update($, brain, () => view)
   } catch (err) {
@@ -425,7 +485,7 @@ export function brainTree(view: BrainView | null, now: number, els: BrainEls, on
   }
 
   const { colors, ranked } = tagColors(view.nodes)
-  const insight = computeInsight(view.nodes)
+  const insight = computeInsight(view.nodes, view.priorities, now)
   const stat = (label: string, value: string, sub: string, color: string) => (
     <Box flexDirection="column" flexGrow={1} padding="sm" borderStyle="round" borderColor={pal.border} backgroundColor={pal.chip}>
       <Text size="caption" color={pal.faint}>
@@ -645,7 +705,7 @@ export function brainExport(view: BrainView | null, now: number): BrainExport | 
         }))
     : []
 
-  const ins = computeInsight(view.nodes)
+  const ins = computeInsight(view.nodes, view.priorities, now)
   return {
     insight: ins ? { ...ins, focusSvg: focusSvg(view.nodes, DARK), kindSvg: kindSvg(ins.byKind, DARK) } : null,
     status: view.status,
