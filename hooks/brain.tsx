@@ -210,6 +210,7 @@ export async function refreshBrain($: EngineInterface) {
       priorities: parsePriorities(priorities),
     }
     await update($, brain, () => view)
+    void maybeSyncNotion($, true)
   } catch (err) {
     await setStatus($, '정리하지 못했어요', false, errText(err))
   } finally {
@@ -723,4 +724,101 @@ export function brainExport(view: BrainView | null, now: number): BrainExport | 
       isCurrent: nd.ids.includes(view.currentId),
     })),
   }
+}
+
+// ─── the Notion bridge ─────────────────────────────────────────────────────
+// The morning brief and the Sunday review run in the cloud and read Notion, not
+// this computer. So a few times a day the board rewrites one Notion page, named
+// in ~/Library/Application Support/my-board/notion.json ({ "pageId": "…" }).
+
+const NOTION_SYNC_KEY = 'notion-sync-v1'
+const NOTION_EVERY = 6 * 3_600_000
+const NOTION_SERVERS = ['claude.ai Notion', 'Notion', 'c5099e57-a99c-416c-a4bd-07a186eea3c8']
+let notionServer: string | undefined
+let notionBusy = false
+
+const stamp = (t: number) => {
+  const d = new Date(t)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function notionMarkdown(view: BrainView, now: number) {
+  const ins = computeInsight(view.nodes, view.priorities, now)
+  const lines: string[] = [
+    '> 맥북의 Claude 보드가 하루 몇 번 자동으로 고치는 페이지입니다. 모닝 브리프와 주일 밤 주간리뷰가 이 페이지를 읽습니다. 직접 고치지 않아도 됩니다.',
+    '',
+    '## 갱신',
+    `- ${stamp(now)} (맥북 Claude 보드)`,
+    '',
+  ]
+  if (!ins) return [...lines, '## 점검', '- 아직 점검할 대화가 부족합니다.'].join('\n')
+  const quiet = ins.deadlines.filter(d => d.recent <= 1)
+  lines.push('## ⏰ 손 안 댄 마감 (45일 안, 최근 2주 관련 대화 1개 이하)')
+  lines.push(...(quiet.length ? quiet.map(d => `- ${d.name}: ${d.when} 마감 (${d.left}일 남음) · 최근 2주 관련 대화 ${d.recent}개`) : ['- 없음']))
+  const busy = ins.deadlines.filter(d => d.recent > 1)
+  if (busy.length) lines.push(...busy.map(d => `- (진행 중) ${d.name}: ${d.when} 마감 (${d.left}일 남음) · 최근 2주 관련 대화 ${d.recent}개`))
+  lines.push('', '## 🐢 오래 손 안 댄 일 (30일 넘게 관련 대화 없음)')
+  lines.push(...(ins.stalled.length ? ins.stalled.map(w => `- ${w.name}: ${w.days < 0 ? '아직 관련 대화 없음' : `${w.days}일째 관련 대화 없음`}`) : ['- 없음']))
+  lines.push(
+    '',
+    '## 📊 일하는 방식',
+    `- 맥락 이어가기: ${ins.continuity.rate}% (새 대화 중 앞선 일과 이어진 비율)`,
+    `- 일의 흐름: ${ins.flows.count}개${ins.flows.names.length ? ` (${ins.flows.names.map(t => `#${t}`).join(' · ')})` : ''} · 따로 떨어진 대화 ${ins.flows.isolated}개`,
+    `- 중요한 일 비중: ${ins.focus.importantShare}% (중요도 4~5인 일에 쓴 대화량)`,
+    `- 일의 종류: ${ins.byKind.map(([k, p]) => `${k} ${p}%`).join(', ')}`,
+  )
+  if (ins.neglected.length) lines.push(`- 중요한데 손이 덜 간 일: ${ins.neglected.slice(0, 3).join(', ')}`)
+  if (ins.sinks.length) lines.push(`- 가벼운데 시간이 많이 든 일: ${ins.sinks.slice(0, 3).join(', ')}`)
+  lines.push(
+    '',
+    '## ⚠️ 한계',
+    `- 이 맥북의 Claude Code 대화 ${ins.total}개만 봅니다. 채팅 탭·노션·오프라인에서 한 일은 반영되지 않습니다.`,
+    '- 중요도는 내 우선순위 파일을 기준으로 AI가 매긴 값입니다.',
+  )
+  return lines.join('\n')
+}
+
+/** Rewrites the Notion page at most every few hours, from the latest second-brain view. */
+export async function maybeSyncNotion($: EngineInterface, force = false) {
+  if (notionBusy) return
+  notionBusy = true
+  try {
+    const view = await read($, brain)
+    if (!view || view.nodes.length === 0 || view.isBusy) return
+    const now = await $.clock.now()
+    const last = (await $.store.get(NOTION_SYNC_KEY)) as { at?: number; ok?: boolean } | undefined
+    if (!force && last?.ok && last.at && now - last.at < NOTION_EVERY) return
+    const home = (await $.env.get('HOME')) ?? ''
+    let pageId = ''
+    try {
+      pageId = String((JSON.parse(await $.fs.read(`${home}/Library/Application Support/my-board/notion.json`)) as { pageId?: string }).pageId ?? '')
+    } catch {
+      return
+    }
+    if (!pageId) return
+    const args = { page_id: pageId, command: 'replace_content', new_str: notionMarkdown(view, now), allow_async: false }
+    let error = ''
+    for (const server of notionServer ? [notionServer] : NOTION_SERVERS) {
+      try {
+        const r = await $.mcp.call(server, 'notion-update-page', args)
+        if (r.isError) {
+          error = JSON.stringify(r.content).slice(0, 200)
+          continue
+        }
+        notionServer = server
+        await $.store.set(NOTION_SYNC_KEY, { at: now, ok: true, server })
+        return
+      } catch (err) {
+        error = errText(err)
+      }
+    }
+    await $.store.set(NOTION_SYNC_KEY, { at: now, ok: false, error })
+  } finally {
+    notionBusy = false
+  }
+}
+
+export async function notionSyncState($: EngineInterface) {
+  return (await $.store.get(NOTION_SYNC_KEY)) as { at?: number; ok?: boolean; error?: string; server?: string } | undefined
 }

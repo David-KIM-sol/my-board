@@ -6,7 +6,7 @@ import type { BoardData, Connector, Limit, Sample, Segment, Settings } from '../
 import { CONNECTORS, DARK, FONT, GROUP_ORDER, UUID, clockText, errText, esc, paletteFor } from './common'
 import type { Palette } from './common'
 import { activityBody, readActivity, onToolEnd, onToolStart, onTurnEnd, onTurnStart, tick } from './activity'
-import { BRAIN_PANE, BRAIN_TITLE, brainExport, brainTree, prioritiesPath, readBrain, refreshBrain } from './brain'
+import { BRAIN_PANE, BRAIN_TITLE, brainExport, brainTree, maybeSyncNotion, prioritiesPath, readBrain, refreshBrain } from './brain'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -513,6 +513,7 @@ export const register: Register = on => {
     $.clock.every(4000, () => void tick($))
     await installViewer($)
     $.clock.every(5000, () => void writeDesktop($))
+    $.clock.every(60_000, () => void maybeSyncNotion($))
     $.clock.after(8000, () => void refreshBrain($))
 
     return result

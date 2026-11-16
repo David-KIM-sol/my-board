@@ -26,6 +26,8 @@ export type Insight = {
   neglected: string[]
   sinks: string[]
   notes: string[]
+  deadlines: { name: string; when: string; left: number; recent: number }[]
+  stalled: { name: string; days: number }[]
 }
 
 const median = (xs: number[]) => {
@@ -77,6 +79,8 @@ export function computeInsight(nodes: BrainNode[], pri?: Priorities, now: number
 
   const rate = Math.round((100 * continued) / comparable)
   const notes: string[] = []
+  const deadlines: Insight['deadlines'] = []
+  const stalled: Insight['stalled'] = []
 
   // 마감과 미뤄지는 일: the priorities file names them, the conversations show whether they got attention.
   const about = (n: BrainNode, ws: string[]) => {
@@ -89,6 +93,7 @@ export function computeInsight(nodes: BrainNode[], pri?: Priorities, now: number
     if (!Number.isFinite(left) || left < 0 || left > 45) continue
     const recent = nodes.filter(n => about(n, d.words) && now - n.lastAt < 14 * 86_400_000).length
     const when = `${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8, 10))}`
+    deadlines.push({ name: d.name, when, left, recent })
     notes.push(
       recent <= 1
         ? `⏰ ${d.name}: ${when} 마감(${left}일 남음)인데 최근 2주 관련 대화가 ${recent}개예요. 오늘 시작할 일 하나를 정해 보세요.`
@@ -98,6 +103,7 @@ export function computeInsight(nodes: BrainNode[], pri?: Priorities, now: number
   for (const w of pri?.watch ?? []) {
     const lastSeen = Math.max(0, ...nodes.filter(n => about(n, w.words)).map(n => n.lastAt))
     const days = lastSeen ? Math.floor((now - lastSeen) / 86_400_000) : -1
+    if (days < 0 || days > 30) stalled.push({ name: w.name, days })
     if (days < 0) notes.push(`🐢 ${w.name}: 아직 관련 대화가 없어요.`)
     else if (days > 30) notes.push(`🐢 ${w.name}: ${days}일째 관련 대화가 없어요.`)
   }
@@ -119,6 +125,8 @@ export function computeInsight(nodes: BrainNode[], pri?: Priorities, now: number
     neglected,
     sinks,
     notes,
+    deadlines,
+    stalled,
   }
 }
 
